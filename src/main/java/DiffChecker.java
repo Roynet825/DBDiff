@@ -1,17 +1,18 @@
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Multimap;
-import com.google.common.collect.Sets;
+import com.google.common.collect.*;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import dao.DataDao;
 import dao.SqlDao;
 import dto.Data;
 import dto.Sql;
 import org.apache.commons.lang3.StringUtils;
 
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 
 public class DiffChecker {
@@ -28,17 +29,17 @@ public class DiffChecker {
     public void check(final Set<String> tableNames, int snap_id_old, int snap_id_new) {
 
         // tableName -> Data List
-        Map<String, Collection<Data>> oldDataPerTbl = groupByTblName(dataDao.getBySnapId(snap_id_old));
-        Map<String, Collection<Data>> newDataPerTbl = groupByTblName(dataDao.getBySnapId(snap_id_new));
+        Map<String, List<Data>> oldDataPerTbl = groupByTblName(dataDao.getBySnapId(snap_id_old));
+        Map<String, List<Data>> newDataPerTbl = groupByTblName(dataDao.getBySnapId(snap_id_new));
 
         List<Sql> realSqls = getRealSqls(tableNames);
 
         for (Sql sql : realSqls) {
             String tableName = sql.getTblName();
 
-            //PK -> DK List (In case of multiple DK exist for one PK)
-            Map<String, Collection<Data>> oldTblDataMap = generateMap(oldDataPerTbl.get(tableName));
-            Map<String, Collection<Data>> newTblDataMap = generateMap(newDataPerTbl.get(tableName));
+            //PK -> Data List (In case of multiple DK exist for one PK)
+            Map<String, List<Data>> oldTblDataMap = generateMap(oldDataPerTbl.get(tableName));
+            Map<String, List<Data>> newTblDataMap = generateMap(newDataPerTbl.get(tableName));
 
             Set<String> oldPks = oldTblDataMap.keySet();
             Set<String> newPks = newTblDataMap.keySet();
@@ -47,48 +48,52 @@ public class DiffChecker {
             Set<String> addPks = Sets.difference(newPks, oldPks);
 
             Set<String> possibleModPks = Sets.intersection(oldPks, newPks);
-            Set<String> modPksMultiDk = Sets.newHashSet();
             Set<String> modPks = Sets.newHashSet();
 
             for (String possibleModPk : possibleModPks) {
-                Collection<Data> oldData = oldTblDataMap.get(possibleModPk);
-                Collection<Data> newData = newTblDataMap.get(possibleModPk);
-                if (oldData.size() != newData.size()) { //multiple DK exist for one PK
-                    modPksMultiDk.add(possibleModPk);
-                } else if (oldData.size() == 1) { //Only one DK
-                    String oldDk = Lists.newArrayList(oldData).get(0).getDk();
-                    String newDK = Lists.newArrayList(newData).get(0).getDk();
+                List<Data> oldData = oldTblDataMap.get(possibleModPk);
+                List<Data> newData = newTblDataMap.get(possibleModPk);
+                if (oldData.size() == newData.size() && oldData.size() == 1) { //Only one DK
+                    String oldDk = oldData.get(0).getDk();
+                    String newDK = newData.get(0).getDk();
                     if (!StringUtils.equals(oldDk, newDK)) {
                         modPks.add(possibleModPk);
                     }
+                } else {
+                    System.err.println("PK not correct!! " + tableName + ": " + possibleModPk);
                 }
-                //Other case , treat same
             }
 
-            System.out.println("****************************************************");
-            System.out.println("Table: [" + tableName + "] diff check result:");
-            System.out.println("----------------------------------------------------");
-            System.out.println("  * Deleted :");
-            for (String delKey : delPks) {
-                for (Data data :
-                        oldTblDataMap.get(delKey)) {
-                    System.out.println("     " + delKey + ":" + data.getDataMap());
+            if (delPks.size() > 0 || addPks.size() > 0 || modPks.size() > 0) {
+                System.out.println("****************************************************");
+                System.out.println("Table: [" + tableName + "] diff check result:");
+            }
+
+            if (delPks.size() > 0) {
+                System.out.println("----------------------------------------------------");
+                System.out.println("  * Deleted :");
+                for (String delKey : delPks) {
+                    for (Data data :
+                            oldTblDataMap.get(delKey)) {
+                        System.out.println("     " + delKey + ":" + data.getPk());
+                    }
                 }
             }
-            System.out.println("----------------------------------------------------");
-            System.out.println("  * Added :");
-            for (String addKey : addPks) {
-                for (Data data :
-                        newTblDataMap.get(addKey)) {
-                    System.out.println("     " + addKey + ":" + data.getDataMap());
+
+            if (addPks.size() > 0) {
+                System.out.println("----------------------------------------------------");
+                System.out.println("  * Added :");
+                for (String addKey : addPks) {
+                    for (Data data :
+                            newTblDataMap.get(addKey)) {
+                        System.out.println("     " + addKey + ":" + data.getPk());
+                    }
                 }
             }
-            System.out.println("----------------------------------------------------");
-            System.out.println("  * Modified due to multiple DK :");
-            printMods(modPksMultiDk, oldTblDataMap, newTblDataMap);
+
             System.out.println("----------------------------------------------------");
             System.out.println("  * Modified:");
-            printMods(modPks, oldTblDataMap, newTblDataMap); //Actually should check modified column by decode JSON
+            printMods(modPks, oldTblDataMap, newTblDataMap);
             System.out.println("----------------------------------------------------");
 
             System.out.println("****************************************************");
@@ -97,51 +102,42 @@ public class DiffChecker {
     }
 
     private void printMods(Set<String> modPksMultiDk,
-                           Map<String, Collection<Data>> oldTblDataMap,
-                           Map<String, Collection<Data>> newTblDataMap) {
+                           Map<String, List<Data>> oldTblDataMap,
+                           Map<String, List<Data>> newTblDataMap) {
         for (String modKey : modPksMultiDk) {
-            printMod("     [OLD]", oldTblDataMap, modKey);
-            printMod("     [NEW]", newTblDataMap, modKey);
+            Data oldData = oldTblDataMap.get(modKey).get(0);
+            Data newData = newTblDataMap.get(modKey).get(0);
+            MapDifference md = jsonDiff(oldData.getDataMap(), newData.getDataMap());
+            System.out.println("     " + md.entriesDiffering());
         }
     }
 
-    private void printMod(String s, Map<String, Collection<Data>> oldTblDataMap, String modKey) {
-        for (Data data :
-                oldTblDataMap.get(modKey)) {
-            System.out.println(s + modKey + ":" + data.getDataMap());
-        }
-    }
-
-    private Map<String, Collection<Data>> generateMap(Collection<Data> data) {
-        Multimap<String, Data> pkData = ArrayListMultimap.create();
+    private Map<String, List<Data>> generateMap(Collection<Data> data) {
         if (data != null) {
-            for (Data dat : data) {
-                pkData.put(dat.getPk(), dat);
-            }
+            return data.stream().collect(Collectors.groupingBy(Data::getPk));
         }
-
-        return pkData.asMap();
+        return Maps.newHashMap();
     }
 
-    private Map<String, Collection<Data>> groupByTblName(List<Data> data) {
-        Multimap<String, Data> tableData = ArrayListMultimap.create();
-        for (Data dat : data) {
-            tableData.put(dat.getTblName(), dat);
-        }
-        return tableData.asMap();
+    private Map<String, List<Data>> groupByTblName(List<Data> data) {
+        return data.stream().collect(Collectors.groupingBy(Data::getTblName));
     }
 
     private List<Sql> getRealSqls(Set<String> tableNames) {
-        List<Sql> realSqls = Lists.newArrayList();
         if (tableNames == null || tableNames.size() <= 0) {
-            realSqls.addAll(sqlDao.getAll());
+            return sqlDao.getAll();
         } else {
-            for (Sql sql : sqlDao.getAll()) {
-                if (tableNames.contains(sql.getTblName())) {
-                    realSqls.add(sql);
-                }
-            }
+            return sqlDao.getAll().stream()
+                    .filter(sql -> tableNames.contains(sql.getTblName()))
+                    .collect(Collectors.toList());
         }
-        return realSqls;
+    }
+
+    private MapDifference jsonDiff(String json1, String json2){
+        Gson g = new Gson();
+        Type mapType = new TypeToken<Map<String, Object>>(){}.getType();
+        Map<String, Object> firstMap = g.fromJson(json1, mapType);
+        Map<String, Object> secondMap = g.fromJson(json2, mapType);
+        return Maps.difference(firstMap, secondMap);
     }
 }
