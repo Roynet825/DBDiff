@@ -72,31 +72,24 @@ public class DiffChecker {
             if (delPks.size() > 0) {
                 System.out.println("----------------------------------------------------");
                 System.out.println("  * Deleted :");
-                for (String delKey : delPks) {
-                    for (Data data :
-                            oldTblDataMap.get(delKey)) {
-                        System.out.println("     " + delKey + ":" + data.getPk());
-                    }
-                }
+                delPks.forEach(s -> System.out.println("     " + s));
             }
 
             if (addPks.size() > 0) {
                 System.out.println("----------------------------------------------------");
                 System.out.println("  * Added :");
-                for (String addKey : addPks) {
-                    for (Data data :
-                            newTblDataMap.get(addKey)) {
-                        System.out.println("     " + addKey + ":" + data.getPk());
-                    }
-                }
+                addPks.forEach(s -> System.out.println("     " + s));
             }
 
-            System.out.println("----------------------------------------------------");
-            System.out.println("  * Modified:");
-            printMods(modPks, oldTblDataMap, newTblDataMap);
-            System.out.println("----------------------------------------------------");
+            if (modPks.size() > 0) {
+                System.out.println("----------------------------------------------------");
+                System.out.println("  * Modified:");
+                printMods(modPks, oldTblDataMap, newTblDataMap);
+            }
 
-            System.out.println("****************************************************");
+            if (delPks.size() > 0 || addPks.size() > 0 || modPks.size() > 0) {
+                System.out.println("****************************************************");
+            }
         }
 
     }
